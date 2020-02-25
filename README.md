@@ -20,7 +20,7 @@ A utility written in Go to provide reloading for Go HTTP applications.
     SourceAddr = ":3000"
     TargetAddr = ":3001"
 
-Possible configuration options.
+Possible configuration options:
 
 | Attribute  | Description                                  | Default | Required |
 | ---------- | -------------------------------------------- | ------- | -------- |
