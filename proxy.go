@@ -112,6 +112,7 @@ func (p *Proxy) compile() {
 		return
 	}
 	p.cmd = c
+	p.err = nil
 }
 
 // badGatewayWriter wraps a ResponseWriter to allow handling of bad gateway errors from the
