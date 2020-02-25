@@ -30,6 +30,8 @@ Possible configuration options:
 | SourceAddr | The HTTP listen address                      | :3000   |          |
 | TargetAddr | The listen address of the target application | :3001   |          |
 
+If `bash` or `sh` is available on the system the build and run commands will be executed as `bash -c "$COMMAND"` to give greater flexibility in creating build and run command rules. When they are not available the command will fall back to being executed directly using Go's exec.Command functionality. Authors of `recharge.conf` files should be aware of the limitations of various systems that their projects may be run on.
+
 ## Example
 
 `recharge` contains a demo application in the `demo` directory which is ready to be used with the included `recharge.conf`. Simply start the `recharge` application in its project root to see it in action.
