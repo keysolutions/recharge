@@ -35,8 +35,9 @@ type Proxy struct {
 	// should be triggered.
 	Change <-chan string
 
-	// once controls initialization.
-	once sync.Once
+	// initOnce guards initialization of the Proxy struct from happening
+	// more than once.
+	initOnce sync.Once
 
 	// mu protects the following attributes.
 	mu           sync.RWMutex
@@ -46,7 +47,7 @@ type Proxy struct {
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	p.once.Do(p.init)
+	p.init()
 
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -71,23 +72,25 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // init is called upon the first access to ServeHTTP to setup the environment
 // required for the proxy to operate.
 func (p *Proxy) init() {
-	p.reverseProxy = httputil.NewSingleHostReverseProxy(p.TargetURL)
-	p.compile()
-	go func() {
-		// Reloads are debounced to prevent successive saves from triggering many builds to
-		// kick off unnecessarily. This is especially useful when using formatting tools
-		// (gofmt, goimports, etc.) after saving a file as they will save the file again after
-		// formatting and it is not useful to run a build each time.
-		debouncer := debounce.New(100 * time.Millisecond)
-		for {
-			select {
-			case <-p.Change:
-				debouncer(p.compile)
-			case <-p.Context.Done():
-				return
+	p.initOnce.Do(func() {
+		p.reverseProxy = httputil.NewSingleHostReverseProxy(p.TargetURL)
+		p.compile()
+		go func() {
+			// Reloads are debounced to prevent successive saves from triggering many builds to
+			// kick off unnecessarily. This is especially useful when using formatting tools
+			// (gofmt, goimports, etc.) after saving a file as they will save the file again after
+			// formatting and it is not useful to run a build each time.
+			debouncer := debounce.New(100 * time.Millisecond)
+			for {
+				select {
+				case <-p.Change:
+					debouncer(p.compile)
+				case <-p.Context.Done():
+					return
+				}
 			}
-		}
-	}()
+		}()
+	})
 }
 
 // compile builds and runs the target application. If the target application is running
