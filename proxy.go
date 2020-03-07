@@ -35,24 +35,19 @@ type Proxy struct {
 	// should be triggered.
 	Change <-chan string
 
-	// initOnce guards initialization of the Proxy struct from happening
-	// more than once.
-	initOnce sync.Once
-
-	// mu protects the following attributes.
-	mu           sync.RWMutex
+	initOnce     sync.Once              // initOnce guards initialization.
 	reverseProxy *httputil.ReverseProxy // The reverse proxy handler.
-	cmd          *exec.Cmd              // The currently running command.
-	err          error                  // The last error encountered.
+	change       chan string            // Forwarding change channel.
+
+	mu  sync.Mutex // mu protects the following attributes.
+	cmd *exec.Cmd  // The currently running command.
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.init()
 
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	if p.err != nil {
-		http.Error(w, p.err.Error(), http.StatusInternalServerError)
+	if err := p.buildAndRun(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -74,17 +69,25 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (p *Proxy) init() {
 	p.initOnce.Do(func() {
 		p.reverseProxy = httputil.NewSingleHostReverseProxy(p.TargetURL)
-		p.compile()
+
+		// The change loop receives changes from the file watcher change channel and
+		// copies the value to the internal change channel. This is done to allow injecting
+		// changes that do not come from the externally defined channel.
+		//
+		// Reloads are debounced to prevent successive saves from triggering many builds to
+		// kick off unnecessarily. This is especially useful when using formatting tools
+		// (gofmt, goimports, etc.) after saving a file. They will save the file again after
+		// formatting and it is not useful to run a build multiple times.
+		debouncer := debounce.New(100 * time.Millisecond)
+		p.change = make(chan string, 1)
+		p.change <- ""
 		go func() {
-			// Reloads are debounced to prevent successive saves from triggering many builds to
-			// kick off unnecessarily. This is especially useful when using formatting tools
-			// (gofmt, goimports, etc.) after saving a file as they will save the file again after
-			// formatting and it is not useful to run a build each time.
-			debouncer := debounce.New(100 * time.Millisecond)
 			for {
 				select {
-				case <-p.Change:
-					debouncer(p.compile)
+				case change := <-p.Change:
+					debouncer(func() {
+						p.change <- change
+					})
 				case <-p.Context.Done():
 					return
 				}
@@ -93,29 +96,33 @@ func (p *Proxy) init() {
 	})
 }
 
-// compile builds and runs the target application. If the target application is running
+// buildAndRun builds and runs the target application. If the target application is running
 // when a new compile is triggered it will be killed.
-func (p *Proxy) compile() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+func (p *Proxy) buildAndRun() error {
+	select {
+	case <-p.change:
+	default:
+		return nil
+	}
 
 	if err := build(p.Context, p.BuildCommand); err != nil {
-		p.err = fmt.Errorf("build: %w", err)
-		return
+		return fmt.Errorf("build: %w", err)
 	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.cmd != nil {
 		if err := p.cmd.Process.Kill(); err != nil {
-			p.err = err
-			return
+			return fmt.Errorf("kill: %w", err)
 		}
 	}
 	c, err := run(p.Context, p.RunCommand)
 	if err != nil {
-		p.err = fmt.Errorf("run: %w", err)
-		return
+		return fmt.Errorf("run: %w", err)
 	}
 	p.cmd = c
-	p.err = nil
+
+	return nil
 }
 
 // badGatewayWriter wraps a ResponseWriter to allow handling of bad gateway errors from the
